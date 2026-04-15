@@ -22,7 +22,7 @@
 2. **자기완결성** — 각 step 파일은 독립된 Claude 세션에서 실행된다. "이전 대화에서 논의한 바와 같이" 같은 외부 참조는 금지한다. 필요한 정보는 전부 파일 안에 적는다.
 3. **사전 준비 강제** — 관련 문서 경로와 이전 step에서 생성/수정된 파일 경로를 명시한다. 세션이 코드를 읽고 맥락을 파악한 뒤 작업하도록 유도한다.
 4. **시그니처 수준 지시** — 함수/클래스의 인터페이스만 제시하고 내부 구현은 에이전트 재량에 맡긴다. 단, 설계 의도에서 벗어나면 안 되는 핵심 규칙(멱등성, 보안, 데이터 무결성 등)은 반드시 명시한다.
-5. **AC는 실행 가능한 커맨드** — "~가 동작해야 한다" 같은 추상적 서술이 아닌 `npm run build && npm test` 같은 실제 실행 가능한 검증 커맨드를 포함한다.
+5. **AC는 실행 가능한 커맨드** — "~가 동작해야 한다" 같은 추상적 서술이 아닌 실제 실행 가능한 검증 커맨드를 포함한다. CLAUDE.md의 `## 명령어` 섹션에 정의된 커맨드를 사용한다 (예: Python이면 `python3 -m pytest`, Node.js이면 `npm run build && npm test`).
 6. **주의사항은 구체적으로** — "조심해라" 대신 "X를 하지 마라. 이유: Y" 형식으로 적는다.
 7. **네이밍** — step name은 kebab-case slug로, 해당 step의 핵심 모듈/작업을 한두 단어로 표현한다 (예: `project-setup`, `api-layer`, `auth-flow`).
 
@@ -107,8 +107,9 @@
 ## Acceptance Criteria
 
 ```bash
-npm run build   # 컴파일 에러 없음
-npm test        # 테스트 통과
+{CLAUDE.md의 ## 명령어 섹션에 정의된 빌드/테스트 커맨드}
+# 예시 (Python): python3 -m pytest -q
+# 예시 (Node.js): npm run build && npm test
 ```
 
 ## 검증 절차
@@ -129,11 +130,23 @@ npm test        # 테스트 통과
 - 기존 테스트를 깨뜨리지 마라
 ```
 
+#### D-4. 스키마 검증 체크리스트
+
+파일 생성 후 execute.py와 스키마 동기화를 확인한다:
+
+- [ ] `phases/index.json`의 `phases[].dir` 값이 실제 디렉토리명과 일치하는가?
+- [ ] `phases/{task-name}/index.json`의 `phase` 값이 디렉토리명에서 숫자 접두사를 뺀 값인가?
+  - 예: 디렉토리 `0-mvp` → `"phase": "mvp"` (브랜치명 `feat-mvp` 생성에 사용됨)
+- [ ] `steps[].step`이 0부터 연속된 정수인가?
+- [ ] 모든 `steps[].status`가 `"pending"`인가?
+- [ ] 각 step 번호에 대응하는 `step{N}.md` 파일이 존재하는가?
+
 ### E. 실행
 
 ```bash
-python3 scripts/execute.py {task-name}        # 순차 실행
-python3 scripts/execute.py {task-name} --push  # 실행 후 push
+python3 scripts/execute.py {task-name}                              # 순차 실행
+python3 scripts/execute.py {task-name} --push                       # 실행 후 push
+python3 scripts/execute.py {task-name} --model claude-opus-4-6     # 모델 지정
 ```
 
 execute.py가 자동으로 처리하는 것:
@@ -149,3 +162,22 @@ execute.py가 자동으로 처리하는 것:
 
 - **error 발생 시**: `phases/{task-name}/index.json`에서 해당 step의 `status`를 `"pending"`으로 바꾸고 `error_message`를 삭제한 뒤 재실행한다.
 - **blocked 발생 시**: `blocked_reason`에 적힌 사유를 해결한 뒤, `status`를 `"pending"`으로 바꾸고 `blocked_reason`을 삭제한 뒤 재실행한다.
+
+완료 후 다음 단계:
+
+1. **결과 확인**: 모든 step이 `"completed"` 상태인지 확인한다.
+2. **PR 생성** (`--push`로 실행한 경우):
+   ```bash
+   gh pr create --title "feat({task-name}): {phase 설명}" \
+     --body "$(cat <<'EOF'
+   ## Summary
+   - {step 목록 요약}
+   EOF
+   )"
+   ```
+3. **리뷰**: PR 생성 후 `/review` 스킬을 호출해 변경사항을 검증한다.
+
+브랜치 전략:
+- execute.py가 자동 생성하는 브랜치명: `feat-{task-name}`
+- 같은 task를 재실행하면 동일 브랜치에 커밋이 누적된다.
+- base branch는 `main`으로 PR을 연다.
