@@ -469,6 +469,36 @@ class TestInvokeClaude:
 
         assert mock_run.call_args[1]["timeout"] == 1800
 
+    def test_output_json_is_valid_utf8(self, executor):
+        """output JSON이 UTF-8로 저장되는지 검증."""
+        mock_result = MagicMock(returncode=0, stdout='{}', stderr="한글 출력")
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run", return_value=mock_result):
+            executor._invoke_claude(step, "preamble")
+        raw = (executor._phase_dir / "step2-output.json").read_bytes()
+        data = json.loads(raw.decode("utf-8"))
+        assert data["stderr"] == "한글 출력"
+
+    def test_includes_model_flag(self, executor):
+        """subprocess 커맨드에 --model 플래그와 기본 모델명이 포함되는지 검증."""
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_claude(step, "preamble")
+        cmd = mock_run.call_args[0][0]
+        assert "--model" in cmd
+        assert cmd[cmd.index("--model") + 1] == "claude-sonnet-4-6"
+
+    def test_custom_model_is_passed(self, executor):
+        """executor._model에 설정된 커스텀 모델이 subprocess에 전달되는지 검증."""
+        executor._model = "claude-opus-4-5"
+        mock_result = MagicMock(returncode=0, stdout="{}", stderr="")
+        step = {"step": 2, "name": "ui"}
+        with patch("subprocess.run", return_value=mock_result) as mock_run:
+            executor._invoke_claude(step, "preamble")
+        cmd = mock_run.call_args[0][0]
+        assert cmd[cmd.index("--model") + 1] == "claude-opus-4-5"
+
 
 # ---------------------------------------------------------------------------
 # progress_indicator (= 이전 Spinner)
@@ -493,6 +523,41 @@ class TestProgressIndicator:
 # ---------------------------------------------------------------------------
 
 class TestMainCli:
+    def _run_main_with_mock(self, argv, tmp_project):
+        """StepExecutor를 mock하여 main() 실행 후 생성자 인자를 반환."""
+        created = []
+
+        def fake_executor(phase_dir_name, *, auto_push, model):
+            created.append({"phase": phase_dir_name, "auto_push": auto_push, "model": model})
+            inst = MagicMock()
+            return inst
+
+        with patch("sys.argv", argv):
+            with patch.object(ex, "ROOT", tmp_project):
+                with patch.object(ex, "StepExecutor", side_effect=fake_executor):
+                    ex.main()
+        return created[0]
+
+    def test_default_model(self, tmp_project):
+        """--model 미지정 시 기본값이 'claude-sonnet-4-6'인지 검증."""
+        args = self._run_main_with_mock(["execute.py", "0-mvp"], tmp_project)
+        assert args["model"] == "claude-sonnet-4-6"
+
+    def test_model_arg(self, tmp_project):
+        """--model 플래그가 StepExecutor에 전달되는지 검증."""
+        args = self._run_main_with_mock(["execute.py", "0-mvp", "--model", "claude-opus-4-5"], tmp_project)
+        assert args["model"] == "claude-opus-4-5"
+
+    def test_push_flag(self, tmp_project):
+        """--push 플래그가 auto_push=True로 StepExecutor에 전달되는지 검증."""
+        args = self._run_main_with_mock(["execute.py", "0-mvp", "--push"], tmp_project)
+        assert args["auto_push"] is True
+
+    def test_no_push_flag_default(self, tmp_project):
+        """--push 미지정 시 auto_push=False가 기본값인지 검증."""
+        args = self._run_main_with_mock(["execute.py", "0-mvp"], tmp_project)
+        assert args["auto_push"] is False
+
     def test_no_args_exits(self):
         with patch("sys.argv", ["execute.py"]):
             with pytest.raises(SystemExit) as exc_info:
